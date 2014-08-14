@@ -1,0 +1,4 @@
+name = Slow Resource
+description = A Drupal module that simulates slow page loads via SQL queries and external HTTP requests.
+package = Development
+core = 7.x

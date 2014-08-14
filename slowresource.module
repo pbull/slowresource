@@ -1,0 +1,167 @@
+<?php
+
+/**
+ * Implements hook_menu().
+ */
+function slowresource_menu() {
+  $items = array();
+  $items['very-slow'] = array(
+    'title' => 'A Very Slooooooow Page',
+    'page callback' => 'slowresource_page',
+    'description' => 'A very slow loading page.',
+    'menu_name' => 'navigation',
+    'access arguments' => array('access content'),
+  );
+  $items['api/resource/%'] = array(
+    'page callback' => 'slowresource_slow_api',
+    'page arguments' => array(2),
+    'type' => MENU_CALLBACK,
+    'access arguments' => array('access content'),
+  );
+
+  return $items;
+}
+
+/**
+ * A page that makes an API request and prints the output.
+ */
+function slowresource_page() {
+  $content = '<p>Make a request to a very slow external resource:</p>';
+
+  // Select a random node id.
+  $sql = 'SELECT nid FROM node ORDER BY RAND()';
+  $nid = db_query_range($sql, 0, 1)->fetchField();
+
+  if ($response = slowresource_request($nid)) {
+    $content .= '<pre>' . print_r($response, 1) . '<pre>';
+  } else {
+    $content = "No data available.";
+  }
+
+  return $content;
+}
+
+/**
+ * Implements hook_block_info().
+ */
+function slowresource_block_info() {
+  $blocks['slowresource'] = array(
+    'info' => t('External HTTP Request'),
+    'cache' => DRUPAL_NO_CACHE,
+  );
+  $blocks['slowquery'] = array(
+    'info' => t('Slow Query'),
+    'cache' =>DRUPAL_NO_CACHE,
+  );
+
+  return $blocks;
+}
+
+/**
+ * Implements hook_block_view().
+ */
+function slowresource_block_view($delta) {
+  $block = array();
+  switch ($delta) {
+    case 'slowresource':
+      $node = menu_get_object('node');
+      if (user_access('access content') && isset($node->nid)) {
+        $block['content'] = _slowresource_slowresource_block_content($node);
+      }
+      break;
+    case 'slowquery':
+      if (user_access('access content')) {
+        $block['content'] = _slowresource_slowquery_block_content();
+      }
+      break;
+  }
+
+  return $block;
+}
+
+/**
+ * A block containing fields returned from a slow API response.
+ */
+function _slowresource_slowresource_block_content($node) {
+  if ($node->nid && $response = slowresource_request($node->nid)) {
+    $list = array(
+      'Type: ' . $response->type,
+      'Published: ' . (($response->status) ? 'Yes' : 'No'),
+      'Created: ' . format_date($response->created),
+      'Last modified: ' . format_date($response->changed),
+    );
+    return theme('item_list', array('items' => $list, 'title' => 'Content administration'));
+  }
+}
+
+/**
+ * A block containing a random list of node titles, with artificial slow query.
+ */
+function _slowresource_slowquery_block_content() {
+  $items = array();
+
+  // Random nodes list.
+  $sql = 'SELECT nid FROM node ORDER BY RAND()';
+  $nids = db_query_range($sql, 0, 5)->fetchAllAssoc('nid');
+
+  // Randomize sleep time. Total = sleep * number of records.
+  $sleep_time = rand(1, 5);
+  $sql = "SELECT sleep(" . $sleep_time . ") as 'sleep', nid, title FROM node WHERE nid IN (:nids)";
+   $result = db_query(
+    $sql,
+    array(':nids' => array_keys($nids),)
+  );
+
+  foreach ($result as $r) {
+    $items[] = l($r->title, "node/{$r->nid}");
+  }
+  return theme('item_list', array('items' => $items, 'title' => 'Random Node List: ' . $sleep_time));
+}
+
+/**
+ * Make the external HTTP request.
+ */
+function slowresource_request($resource_id) {
+  if (!is_numeric($resource_id)) {
+    return false;
+  }
+
+  $nid = (int) $resource_id;
+  $url = url('api/resource/' . $nid, array('absolute' => true));
+  $req = drupal_http_request($url);
+
+  if ($req->code == 200) {
+    return json_decode($req->data);
+  } else {
+    return false;
+  }
+}
+
+/**
+ * A fake, slow, external API.
+ */
+function slowresource_slow_api($resource_id, $sleep_time = null) {
+  if (is_numeric($resource_id) && $node = node_load($resource_id)) {
+    $content = json_encode($node);
+  }
+  else {
+    $error = array(
+      'request' => request_uri(),
+      'message' => t('A valid resource ID is required.'),
+      'required' => 'integer',
+    );
+    $content = json_encode($error);
+  }
+
+  // Pause, make a sandwich.
+  if (!$sleep_time) {
+    $sleep_time = rand(5, 20);
+  }
+  watchdog('pause', $sleep_time . " second delay");
+  sleep($sleep_time);
+
+  // JSON response.
+  header('Content-Type: application/json');
+  print $content;
+  drupal_exit();
+}
